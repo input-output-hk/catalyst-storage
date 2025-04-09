@@ -5,13 +5,12 @@ This script is a simple web scraper tool to prepare testing data for the `cardan
 import json
 import os
 import shlex
-import os
 import subprocess
 import time
-
-from bs4 import BeautifulSoup
+from decimal import Decimal
 
 import address
+from bs4 import BeautifulSoup
 
 # variables
 MAX_ATTEMPT = 3
@@ -25,7 +24,7 @@ USER_AGENT = ""
 def request(url) -> str:
     curl_command = f"curl '{url}' \
     -b 'cf_clearance={CF_CLEARANCE}' \
-    -H 'user-agent: {USER_AGENT}"
+    -H 'user-agent: {USER_AGENT}'"
 
     args = shlex.split(curl_command)
     result = subprocess.run(args, capture_output=True, text=True)
@@ -107,7 +106,7 @@ for (i, record) in enumerate(processing_records):
             for (j, (item_row, amount_row)) in enumerate(zip(item_rows, amount_rows)):
                 asset_name = "\n".join(item_row.get_text().split("\n")[2:-2]).strip()
                 asset_url = item_row.attrs["href"]
-                amount = float(amount_row.attrs["title"].replace(",", ""))
+                amount = int(Decimal(amount_row.attrs["title"].replace(",", "")))
 
                 print(f"    Extracting asset {asset_url}... ({j + 1}/{len(item_rows)})")
 
@@ -135,7 +134,7 @@ for (i, record) in enumerate(processing_records):
 
             break
         except Exception as e:
-            print(e)
+            print(f"ERROR: {e}")
             
             if attempt_count >= MAX_ATTEMPT:
                 print(f"    Skipped MAX ATTEMPT REACHED")
