@@ -31,8 +31,6 @@ def request(url) -> str:
     result = subprocess.run(args, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print("Error:")
-        print(result.stderr)
         raise Exception(result.stderr)
 
     return result.stdout
