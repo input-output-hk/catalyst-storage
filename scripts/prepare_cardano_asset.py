@@ -40,11 +40,21 @@ def get_stake_asset_page(stake_addr: str) -> str:
 def get_stake_data_page(stake_addr: str) -> str:
     return request(f"https://preprod.cexplorer.io/stake/{stake_addr}")
 
-def get_tx_page(tx) -> str:
-    return request(f"https://preprod.cexplorer.io/tx/{tx}")
+def get_index_page() -> str:
+    return request(f"https://preprod.cexplorer.io/")
 
-def get_asset_page(asset) -> str:
+def get_asset_page(asset: str) -> str:
     return request(f"https://preprod.cexplorer.io/asset/{asset}")
+
+def epoch_2_slot(epoch: int) -> int:
+  shelley_start_epoch = 208
+  shelley_start_slot = 88_416_000
+  slots_per_epoch = 432_000
+
+  if epoch < shelley_start_epoch:
+    raise Exception("Epochs before 208 (Byron era) have a different slot timing")
+
+  return shelley_start_slot + (epoch - shelley_start_epoch) * slots_per_epoch
 
 # ------ INIT PROCESS ------
 
@@ -83,18 +93,16 @@ for (i, record) in enumerate(processing_records):
                 print("    Skipped INACTIVE")
                 break
 
-            tx_url = stake_dom.select_one("table.table a")
-            tx_url = tx_url.attrs["href"]
+            ada_amount_txt = stake_dom.select_one("table.table tr:nth-child(5) span[title]:nth-child(2)")
+            ada_amount = int(Decimal(ada_amount_txt.attrs["title"].replace(",", "")))
 
-            # extracting - tx/:tx_id
-            tx_html = request(f"https://preprod.cexplorer.io{tx_url}")
-            tx_dom = BeautifulSoup(tx_html, "html.parser")
+            # extracting - index
+            index_html = get_index_page()
+            index_dom = BeautifulSoup(index_html, "html.parser")
             
-            slot_txt = tx_dom.select_one("table.table tr:nth-child(4) span")
-            amount_txt = tx_dom.select_one("table.table tr:nth-child(8) span")
-
-            slot_number = int(slot_txt.get_text().replace(",", ""))
-            ada_amount = float(amount_txt.attrs["title"].replace(",", ""))
+            epoch_number_txt = index_dom.select_one("#_epoch_no")
+            epoch_number = int(epoch_number_txt.attrs["data-value"])
+            slot_number = epoch_2_slot(epoch_number)
 
             # extracting - stake/:stake_id/asset
             stake_asset_dom = BeautifulSoup(get_stake_asset_page(stake_addr), "html.parser")
