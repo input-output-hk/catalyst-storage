@@ -1,3 +1,5 @@
+VERSION 0.8
+
 FROM scratch
 
 cardano-asset-preprod:
