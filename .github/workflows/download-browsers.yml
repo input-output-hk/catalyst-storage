@@ -1,0 +1,188 @@
+name: Download browsers packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      browser:
+        description: "Select browser or driver"
+        required: true
+        type: choice
+        options:
+          - firefox
+          - chrome
+          - edge
+          - chromium
+      version:
+        description: "Optional: specify version (leave empty for latest)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 10 * * MON" #UTC time 
+
+permissions:
+  contents: write
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate matrix JSON
+        id: generate
+        run: |
+          if [ '${{ github.event_name }}' == 'schedule' ]; then
+            MATRIX_JSON=$(jq -n \
+              '[
+                {"browser": "firefox", "version": ""},
+                {"browser": "chrome", "version": ""},
+                {"browser": "edge", "version": ""},
+                {"browser": "chromium", "version": ""}
+              ]'
+            )
+          else
+            MATRIX_JSON=$(jq -n \
+              '[
+                {"browser": "${{ inputs.browser }}", "version": "${{ inputs.version }}"}
+              ]'
+            )
+          fi
+          
+          # Use a heredoc-style output block (avoids parsing errors)
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+  download:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Check version
+        id: need_latest
+        run: |
+          echo "Running for: ${{ matrix.browser }}"
+          echo "Checking if version has been set"
+          if [ -z ${{ matrix.version }} ]; then
+            echo "Version is empty. Get latest version"
+            echo "get_latest=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version: ${{ matrix.version }}"
+            echo "get_latest=false" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ matrix.version }}" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Python
+        if: steps.need_latest.outputs.get_latest == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        if: steps.need_latest.outputs.get_latest == 'true'
+        run: pip install requests
+
+      - name: Get latest versions
+        if: steps.need_latest.outputs.get_latest == 'true'
+        id: latest_version
+        run: |
+          import requests, os
+          browser = os.environ.get("BROWSER")
+          env_file = os.getenv('GITHUB_ENV')
+
+          match browser:
+            case "chrome":
+              url = "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
+              version = requests.get(url).json()["versions"][0]["version"]
+            case "firefox":
+              url = "https://product-details.mozilla.org/1.0/firefox_versions.json"
+              version = requests.get(url).json()["LATEST_FIREFOX_VERSION"]
+            case "edge":
+              url = "https://edgeupdates.microsoft.com/api/products"
+              version = next(filter(lambda p: p.get("Product") == "Stable", requests.get(url).json()))['Releases'][0]['ProductVersion']
+            case "chromium":
+              all_binaries = "https://snapshot.debian.org/mr/binary/chromium/"
+              version = [item["version"] for item in requests.get(all_binaries).json().get("result", [])][0].split('-')[0]
+
+          with open(env_file, "a") as variables:
+            variables.write(f"VERSION={version}")
+        shell: python
+        env:
+          BROWSER: ${{ inputs.browser }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Enable Git LFS
+        run: |
+          git lfs install
+          git lfs track "*.zip"
+          git add .gitattributes
+          git commit -m "Configure Git LFS" || echo "LFS already configured"
+
+      - name: Create branch and push
+        run: |
+          BRANCH="${{ matrix.browser }}-${VERSION}"
+
+          echo "Checking branch $BRANCH..."
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "$BRANCH branch already exists. Skip."
+          else
+            echo "Creating branch and download deb"
+            git checkout -b "$BRANCH"
+            
+            case ${{ matrix.browser }} in
+              chrome)
+                url="https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${VERSION}-1_amd64.deb"
+                driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
+                ;;
+              firefox)
+                url="https://ftp.mozilla.org/pub/firefox/releases/${VERSION}/linux-x86_64/en-US/firefox-${VERSION}.deb"
+
+                echo "As for now it downloads latest geckodriver"
+                driver_latest=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r .tag_name)
+                driver_url="https://github.com/mozilla/geckodriver/releases/download/$driver_latest/geckodriver-${driver_latest}-linux64.tar.gz"
+                ;;
+              edge)
+                url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_${VERSION}-1_amd64.deb"
+                driver_url="https://msedgedriver.microsoft.com/${VERSION}/edgedriver_linux64.zip"
+                ;;
+              chromium)
+                ts=$(curl -s "https://snapshot.debian.org/mr/binary/chromium/${VERSION}-1/binfiles?fileinfo=1" \
+                 | jq -r '.fileinfo[ .result[] | select(.architecture=="amd64") | .hash ][0].first_seen')
+                url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium_${VERSION}-1_amd64.deb"
+                driver_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-driver_${VERSION}-1_amd64.deb"
+                ;;
+            esac
+                
+            echo "Download browser..."
+            wget -O ${{ matrix.browser }}.deb $url
+            echo "Zipping package..."
+            mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
+            zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}.zip ${{ matrix.browser }}.deb
+
+            echo "Download driver..."
+            wget -P web-browsers/${{ matrix.browser }}/${VERSION} $driver_url
+            
+            if [ '${{ matrix.browser }}' == 'chromium' ]; then
+              find . -type f -iname "*-driver*" -print0 | xargs -0 zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver.zip
+              rm -f web-browsers/${{ matrix.browser }}/${VERSION}/*.deb
+            fi
+
+            # Commit and push
+            git add web-browsers/${{ matrix.browser }}/${VERSION}
+            git commit -m "Add ${{ matrix.browser }} ${VERSION} package and driver"
+            git push origin "$BRANCH"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
