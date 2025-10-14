@@ -10,6 +10,7 @@ on:
         options:
           - firefox
           - chrome
+          - chrome-for-testing
           - edge
           - chromium
       version:
@@ -37,7 +38,8 @@ jobs:
                 {"browser": "firefox", "version": ""},
                 {"browser": "chrome", "version": ""},
                 {"browser": "edge", "version": ""},
-                {"browser": "chromium", "version": ""}
+                {"browser": "chromium", "version": ""},
+                {"browser": "chrome-for-testing", "version": ""},
               ]'
             )
           else
@@ -105,6 +107,9 @@ jobs:
             case "chromium":
               all_binaries = "https://snapshot.debian.org/mr/binary/chromium/"
               version = [item["version"] for item in requests.get(all_binaries).json().get("result", [])][0].split('-')[0]
+            case "chrome-for-testing":
+              url="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"
+              version=requests.get(url).json()['channels']['Stable']['version']
 
           with open(env_file, "a") as variables:
             variables.write(f"VERSION={version}")
@@ -163,13 +168,21 @@ jobs:
                 url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium_${VERSION}-1_amd64.deb"
                 driver_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-driver_${VERSION}-1_amd64.deb"
                 ;;
+              chrome-for-testing)
+                url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-linux64.zip"
+                driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
+                ;;
             esac
                 
             echo "Download browser..."
-            wget -O ${{ matrix.browser }}.deb $url
-            echo "Zipping package..."
-            mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
-            zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}.zip ${{ matrix.browser }}.deb
+            if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
+              wget -O ${{ matrix.browser }}.deb $url
+              echo "Zipping package..."
+              mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
+              zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}.zip ${{ matrix.browser }}.deb
+            else
+              wget -P web-browsers/${{ matrix.browser }}/${VERSION} $url
+            fi
 
             echo "Download driver..."
             wget -P web-browsers/${{ matrix.browser }}/${VERSION} $driver_url
