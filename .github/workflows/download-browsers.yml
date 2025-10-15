@@ -39,7 +39,7 @@ jobs:
                 {"browser": "chrome", "version": ""},
                 {"browser": "edge", "version": ""},
                 {"browser": "chromium", "version": ""},
-                {"browser": "chrome-for-testing", "version": ""},
+                {"browser": "chrome-for-testing", "version": ""}
               ]'
             )
           else
@@ -49,8 +49,6 @@ jobs:
               ]'
             )
           fi
-          
-          # Use a heredoc-style output block (avoids parsing errors)
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -65,13 +63,9 @@ jobs:
       - name: Check version
         id: need_latest
         run: |
-          echo "Running for: ${{ matrix.browser }}"
-          echo "Checking if version has been set"
-          if [ -z ${{ matrix.version }} ]; then
-            echo "Version is empty. Get latest version"
+          if [ -z "${{ matrix.version }}" ]; then
             echo "get_latest=true" >> $GITHUB_OUTPUT
           else
-            echo "Version: ${{ matrix.version }}"
             echo "get_latest=false" >> $GITHUB_OUTPUT
             echo "VERSION=${{ matrix.version }}" >> $GITHUB_ENV
           fi
@@ -91,6 +85,7 @@ jobs:
         id: latest_version
         run: |
           import requests, os
+
           browser = os.environ.get("BROWSER")
           env_file = os.getenv('GITHUB_ENV')
 
@@ -99,23 +94,20 @@ jobs:
               url = "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
               version = requests.get(url).json()["versions"][0]["version"]
             case "firefox":
-              url = "https://product-details.mozilla.org/1.0/firefox_versions.json"
-              version = requests.get(url).json()["LATEST_FIREFOX_VERSION"]
+              version = requests.get("https://snapshot.debian.org/mr/binary/firefox-esr/").json()["result"][0]["version"]
             case "edge":
               url = "https://edgeupdates.microsoft.com/api/products"
               version = next(filter(lambda p: p.get("Product") == "Stable", requests.get(url).json()))['Releases'][0]['ProductVersion']
             case "chromium":
-              all_binaries = "https://snapshot.debian.org/mr/binary/chromium/"
-              version = [item["version"] for item in requests.get(all_binaries).json().get("result", [])][0].split('-')[0]
+              version = requests.get("https://snapshot.debian.org/mr/binary/chromium/").json()["result"][0]["version"].split('-')[0]
             case "chrome-for-testing":
               url="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"
               version=requests.get(url).json()['channels']['Stable']['version']
-
           with open(env_file, "a") as variables:
             variables.write(f"VERSION={version}")
         shell: python
         env:
-          BROWSER: ${{ inputs.browser }}
+          BROWSER: ${{ matrix.browser }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -137,65 +129,74 @@ jobs:
 
       - name: Create branch and push
         run: |
+          set -e
           BRANCH="${{ matrix.browser }}-${VERSION}"
 
           echo "Checking branch $BRANCH..."
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "$BRANCH branch already exists. Skip."
-          else
-            echo "Creating branch and download deb"
-            git checkout -b "$BRANCH"
-            
+            echo "$BRANCH branch already exists. Skipping."
+            exit 0
+          fi
+          git checkout -b "$BRANCH"
+          
+          if [[ "${{ matrix.browser }}" = "firefox" || "${{ matrix.browser }}" = "chromium" ]]; then ARCH_LIST="amd64 aarch64"; else ARCH_LIST="amd64"; fi
+
+          for ARCH in $ARCH_LIST; do
+            echo "Downloading for $ARCH..."
             case ${{ matrix.browser }} in
               chrome)
                 url="https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${VERSION}-1_amd64.deb"
                 driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
                 ;;
               firefox)
-                url="https://ftp.mozilla.org/pub/firefox/releases/${VERSION}/linux-x86_64/en-US/firefox-${VERSION}.deb"
-
-                echo "As for now it downloads latest geckodriver"
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
+                ts=$(curl -s "https://snapshot.debian.org/mr/binary/firefox-esr/${VERSION}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                url="snapshot.debian.org/archive/debian/${ts}/pool/main/f/firefox-esr/firefox-esr_${VERSION}_${deb_arch}.deb"
                 driver_latest=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r .tag_name)
-                driver_url="https://github.com/mozilla/geckodriver/releases/download/$driver_latest/geckodriver-${driver_latest}-linux64.tar.gz"
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "-aarch64" || echo "64")
+                driver_url="https://github.com/mozilla/geckodriver/releases/download/$driver_latest/geckodriver-${driver_latest}-linux${deb_arch}.tar.gz"
                 ;;
               edge)
                 url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_${VERSION}-1_amd64.deb"
                 driver_url="https://msedgedriver.microsoft.com/${VERSION}/edgedriver_linux64.zip"
                 ;;
               chromium)
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
                 ts=$(curl -s "https://snapshot.debian.org/mr/binary/chromium/${VERSION}-1/binfiles?fileinfo=1" \
-                 | jq -r '.fileinfo[ .result[] | select(.architecture=="amd64") | .hash ][0].first_seen')
-                url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium_${VERSION}-1_amd64.deb"
-                driver_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-driver_${VERSION}-1_amd64.deb"
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium_${VERSION}-1_${deb_arch}.deb"
+                driver_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-driver_${VERSION}-1_${deb_arch}.deb"
                 ;;
               chrome-for-testing)
                 url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-linux64.zip"
                 driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
                 ;;
             esac
-                
-            echo "Download browser..."
+            
+            deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
+            mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
+            
+            echo "Downloading browser..."
             if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
-              wget -O ${{ matrix.browser }}.deb $url
-              echo "Zipping package..."
-              mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
-              zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}.zip ${{ matrix.browser }}.deb
+              wget -P web-browsers/${{ matrix.browser }}/${VERSION} -O "${{ matrix.browser }}_${deb_arch}.deb" "$url"
+              zip -j "web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" "${{ matrix.browser }}_${deb_arch}.deb"
+              rm -f "${{ matrix.browser }}_${deb_arch}.deb"
             else
-              wget -P web-browsers/${{ matrix.browser }}/${VERSION} $url
+              wget -P "web-browsers/${{ matrix.browser }}/${VERSION}" "$url"
             fi
-
-            echo "Download driver..."
-            wget -P web-browsers/${{ matrix.browser }}/${VERSION} $driver_url
+            
+            echo "Downloading driver..."
+            wget -P "web-browsers/${{ matrix.browser }}/${VERSION}" "$driver_url"
             
             if [ '${{ matrix.browser }}' == 'chromium' ]; then
-              find . -type f -iname "*-driver*" -print0 | xargs -0 zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver.zip
-              rm -f web-browsers/${{ matrix.browser }}/${VERSION}/*.deb
+              find . -type f -iname "*-driver*${deb_arch}*" -print0 | xargs -0 zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver-${deb_arch}.zip
+              rm -f web-browsers/${{ matrix.browser }}/${VERSION}/*${deb_arch}.deb
             fi
-
-            # Commit and push
-            git add web-browsers/${{ matrix.browser }}/${VERSION}
-            git commit -m "Add ${{ matrix.browser }} ${VERSION} package and driver"
-            git push origin "$BRANCH"
-          fi
+          done
+          
+          git add web-browsers/${{ matrix.browser }}/${VERSION}
+          git commit -m "Add ${{ matrix.browser }} ${VERSION} package and driver"
+          git push origin "$BRANCH"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
