@@ -20,9 +20,6 @@ on:
   schedule:
     - cron: "0 10 * * MON" #UTC time 
 
-permissions:
-  contents: write
-
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
@@ -109,35 +106,28 @@ jobs:
         env:
           BROWSER: ${{ matrix.browser }}
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Login to AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          aws-region: "eu-central-1"
+          role-to-assume: "arn:aws:iam::332405224602:role/iog-catalyst-storage-uploader"
 
-      - name: Configure Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Enable Git LFS
-        run: |
-          git lfs install
-          git lfs track "*.zip"
-          git add .gitattributes
-          git commit -m "Configure Git LFS" || echo "LFS already configured"
-
-      - name: Create branch and push
+      - name: Download from repos and upload into S3
         run: |
           set -e
-          BRANCH="${{ matrix.browser }}-${VERSION}"
+          BUCKET_NAME="iog-catalyst-storage"
+ 
+          versions=$(aws s3api list-objects-v2 \
+            --bucket "$BUCKET_NAME" \
+            --prefix "${{ matrix.browser }}/" \
+            --delimiter "/" \
+            --query "CommonPrefixes[].Prefix" \
+            --output text)
 
-          echo "Checking branch $BRANCH..."
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "$BRANCH branch already exists. Skipping."
-            exit 0
+          if echo "$versions" | grep -q "${{ matrix.browser }}/${VERSION}/"; then 
+            echo "${VERSION} already exists. Skipping."
+            exit 0 
           fi
-          git checkout -b "$BRANCH"
           
           if [[ "${{ matrix.browser }}" = "firefox" || "${{ matrix.browser }}" = "chromium" ]]; then ARCH_LIST="amd64 aarch64"; else ARCH_LIST="amd64"; fi
 
@@ -175,28 +165,24 @@ jobs:
             esac
             
             deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
-            mkdir -p web-browsers/${{ matrix.browser }}/${VERSION}
+            mkdir -p ${{ matrix.browser }}/${VERSION}
             
             echo "Downloading browser..."
             if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
-              wget -P web-browsers/${{ matrix.browser }}/${VERSION} -O "${{ matrix.browser }}_${deb_arch}.deb" "$url"
-              zip -j "web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" "${{ matrix.browser }}_${deb_arch}.deb"
+              wget -P ${{ matrix.browser }}/${VERSION} -O "${{ matrix.browser }}_${deb_arch}.deb" "$url"
+              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" "${{ matrix.browser }}_${deb_arch}.deb"
               rm -f "${{ matrix.browser }}_${deb_arch}.deb"
             else
-              wget -P "web-browsers/${{ matrix.browser }}/${VERSION}" "$url"
+              wget -P "${{ matrix.browser }}/${VERSION}" "$url"
             fi
             
             echo "Downloading driver..."
-            wget -P "web-browsers/${{ matrix.browser }}/${VERSION}" "$driver_url"
+            wget -P "${{ matrix.browser }}/${VERSION}" "$driver_url"
             
             if [ '${{ matrix.browser }}' == 'chromium' ]; then
-              find . -type f -iname "*-driver*${deb_arch}*" -print0 | xargs -0 zip -j web-browsers/${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver-${deb_arch}.zip
-              rm -f web-browsers/${{ matrix.browser }}/${VERSION}/*${deb_arch}.deb
+              find . -type f -iname "*-driver*${deb_arch}*" -print0 | xargs -0 zip -j ${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver-${deb_arch}.zip
+              rm -f ${{ matrix.browser }}/${VERSION}/*${deb_arch}.deb
             fi
           done
-          
-          git add web-browsers/${{ matrix.browser }}/${VERSION}
-          git commit -m "Add ${{ matrix.browser }} ${VERSION} package and driver"
-          git push origin "$BRANCH"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+          aws s3 cp ${{ matrix.browser }}/${VERSION} s3://${BUCKET_NAME}/${{ matrix.browser }}/${VERSION} --recursive
