@@ -1,0 +1,188 @@
+name: Download browsers and drivers packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      browser:
+        description: "Select browser and driver"
+        required: true
+        type: choice
+        options:
+          - firefox
+          - chrome
+          - chrome-for-testing
+          - edge
+          - chromium
+      version:
+        description: "Optional: specify version (leave empty for latest)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 10 * * MON" #UTC time 
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate matrix JSON
+        id: generate
+        run: |
+          if [ '${{ github.event_name }}' == 'schedule' ]; then
+            MATRIX_JSON=$(jq -n \
+              '[
+                {"browser": "firefox", "version": ""},
+                {"browser": "chrome", "version": ""},
+                {"browser": "edge", "version": ""},
+                {"browser": "chromium", "version": ""},
+                {"browser": "chrome-for-testing", "version": ""}
+              ]'
+            )
+          else
+            MATRIX_JSON=$(jq -n \
+              '[
+                {"browser": "${{ inputs.browser }}", "version": "${{ inputs.version }}"}
+              ]'
+            )
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+  download:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Check version
+        id: need_latest
+        run: |
+          if [ -z "${{ matrix.version }}" ]; then
+            echo "get_latest=true" >> $GITHUB_OUTPUT
+          else
+            echo "get_latest=false" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ matrix.version }}" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Python
+        if: steps.need_latest.outputs.get_latest == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        if: steps.need_latest.outputs.get_latest == 'true'
+        run: pip install requests
+
+      - name: Get latest versions
+        if: steps.need_latest.outputs.get_latest == 'true'
+        id: latest_version
+        run: |
+          import requests, os
+
+          browser = os.environ.get("BROWSER")
+          env_file = os.getenv('GITHUB_ENV')
+
+          match browser:
+            case "chrome":
+              url = "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
+              version = requests.get(url).json()["versions"][0]["version"]
+            case "firefox":
+              version = requests.get("https://snapshot.debian.org/mr/binary/firefox-esr/").json()["result"][0]["version"]
+            case "edge":
+              url = "https://edgeupdates.microsoft.com/api/products"
+              version = next(filter(lambda p: p.get("Product") == "Stable", requests.get(url).json()))['Releases'][0]['ProductVersion']
+            case "chromium":
+              version = requests.get("https://snapshot.debian.org/mr/binary/chromium/").json()["result"][0]["version"].split('-')[0]
+            case "chrome-for-testing":
+              url="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"
+              version=requests.get(url).json()['channels']['Stable']['version']
+          with open(env_file, "a") as variables:
+            variables.write(f"VERSION={version}")
+        shell: python
+        env:
+          BROWSER: ${{ matrix.browser }}
+
+      - name: Login to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: "eu-central-1"
+          role-to-assume: "arn:aws:iam::332405224602:role/ci"
+
+      - name: Download from repos and upload into S3
+        run: |
+          set -e
+          BUCKET_NAME="iog-catalyst-storage"
+ 
+          versions=$(aws s3api list-objects-v2 \
+            --bucket "$BUCKET_NAME" \
+            --prefix "${{ matrix.browser }}/" \
+            --delimiter "/" \
+            --query "CommonPrefixes[].Prefix" \
+            --output text)
+
+          if echo "$versions" | grep -q "${{ matrix.browser }}/${VERSION}/"; then 
+            echo "${VERSION} already exists. Skipping."
+            exit 0 
+          fi
+          
+          if [[ "${{ matrix.browser }}" = "firefox" || "${{ matrix.browser }}" = "chromium" ]]; then ARCH_LIST="amd64 aarch64"; else ARCH_LIST="amd64"; fi
+
+          for ARCH in $ARCH_LIST; do
+            echo "Downloading for $ARCH..."
+            case ${{ matrix.browser }} in
+              chrome)
+                url="https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${VERSION}-1_amd64.deb"
+                driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
+                ;;
+              firefox)
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
+                ts=$(curl -s "https://snapshot.debian.org/mr/binary/firefox-esr/${VERSION}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                url="snapshot.debian.org/archive/debian/${ts}/pool/main/f/firefox-esr/firefox-esr_${VERSION}_${deb_arch}.deb"
+                driver_latest=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r .tag_name)
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "-aarch64" || echo "64")
+                driver_url="https://github.com/mozilla/geckodriver/releases/download/$driver_latest/geckodriver-${driver_latest}-linux${deb_arch}.tar.gz"
+                ;;
+              edge)
+                url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_${VERSION}-1_amd64.deb"
+                driver_url="https://msedgedriver.microsoft.com/${VERSION}/edgedriver_linux64.zip"
+                ;;
+              chromium)
+                deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
+                ts=$(curl -s "https://snapshot.debian.org/mr/binary/chromium/${VERSION}-1/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium_${VERSION}-1_${deb_arch}.deb"
+                driver_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-driver_${VERSION}-1_${deb_arch}.deb"
+                ;;
+              chrome-for-testing)
+                url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-linux64.zip"
+                driver_url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chromedriver-linux64.zip"
+                ;;
+            esac
+            
+            deb_arch=$([ "$ARCH" = "aarch64" ] && echo "arm64" || echo "amd64")
+            mkdir -p ${{ matrix.browser }}/${VERSION}
+            
+            echo "Downloading browser..."
+            if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
+              wget -P ${{ matrix.browser }}/${VERSION} -O "${{ matrix.browser }}_${deb_arch}.deb" "$url"
+              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" "${{ matrix.browser }}_${deb_arch}.deb"
+              rm -f "${{ matrix.browser }}_${deb_arch}.deb"
+            else
+              wget -P "${{ matrix.browser }}/${VERSION}" "$url"
+            fi
+            
+            echo "Downloading driver..."
+            wget -P "${{ matrix.browser }}/${VERSION}" "$driver_url"
+            
+            if [ '${{ matrix.browser }}' == 'chromium' ]; then
+              find . -type f -iname "*-driver*${deb_arch}*" -print0 | xargs -0 zip -j ${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}-driver-${deb_arch}.zip
+              rm -f ${{ matrix.browser }}/${VERSION}/*${deb_arch}.deb
+            fi
+          done
+        
+          aws s3 cp ${{ matrix.browser }}/${VERSION} s3://${BUCKET_NAME}/${{ matrix.browser }}/${VERSION} --recursive
