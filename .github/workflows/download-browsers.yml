@@ -1,10 +1,10 @@
-name: Download browsers packages
+name: Download browsers and drivers packages
 
 on:
   workflow_dispatch:
     inputs:
       browser:
-        description: "Select browser or driver"
+        description: "Select browser and driver"
         required: true
         type: choice
         options:
