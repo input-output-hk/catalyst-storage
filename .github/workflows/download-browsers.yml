@@ -18,7 +18,11 @@ on:
         required: false
         default: ""
   schedule:
-    - cron: "0 10 * * MON" #UTC time 
+    - cron: "0 10 * * MON" #UTC time
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   generate-matrix:
