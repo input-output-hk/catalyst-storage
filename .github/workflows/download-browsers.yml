@@ -185,7 +185,7 @@ jobs:
                   wget -P ${{ matrix.browser }}/${VERSION} $i
                 done
               fi
-              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" *.deb
+              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" ${{ matrix.browser }}/${VERSION}/*.deb
 
               echo "DEBUG..."
               ls -la ${{ matrix.browser }}/${VERSION}
