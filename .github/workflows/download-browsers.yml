@@ -186,6 +186,9 @@ jobs:
                 done
               fi
               zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" *.deb
+
+              echo "DEBUG..."
+              pwd
               rm -f *.deb
             else
               wget -P "${{ matrix.browser }}/${VERSION}" "$url"
