@@ -182,13 +182,16 @@ jobs:
                 libxml_url="snapshot.debian.org/archive/debian/${libxml_ts}/pool/main/libx/libxml2/libxml2-16_${libxml_version}_${deb_arch}.deb"
                 common_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-common_${VERSION}-1_${deb_arch}.deb"
                 for i in $libxml_url $common_url; do
-                  wget -P ${{ matrix.browser }}/${VERSION} $i
+                  wget -P ${{ matrix.browser }}/${VERSION} "$i"
                 done
               fi
-              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" ${{ matrix.browser }}/${VERSION}/*.deb
 
               echo "DEBUG..."
               ls -la ${{ matrix.browser }}/${VERSION}
+
+              zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" ${{ matrix.browser }}/${VERSION}/*.deb
+
+              
               rm -f *.deb
             else
               wget -P "${{ matrix.browser }}/${VERSION}" "$url"
