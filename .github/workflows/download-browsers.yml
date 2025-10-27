@@ -179,7 +179,7 @@ jobs:
                 libxml_version=$(curl -sL https://snapshot.debian.org/mr/binary/libxml2-dev  | jq -r '.result[0].binary_version')
                 libxml_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libxml2-dev/${libxml_version}/binfiles?fileinfo=1" \
                   | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
-                libxml_url=$(snapshot.debian.org/archive/debian/${libxml_ts}/pool/main/libx/libxml2/libxml2-16_${libxml_version}-1_${deb_arch}.deb)
+                libxml_url=$(snapshot.debian.org/archive/debian/${libxml_ts}/pool/main/libx/libxml2/libxml2-16_${libxml_version}_${deb_arch}.deb)
                 common_url=$(snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-common_${VERSION}-1_${deb_arch}.deb)
                 for i in $libxml_url, $common_url; do
                   wget -P ${{ matrix.browser }}/${VERSION} $i
