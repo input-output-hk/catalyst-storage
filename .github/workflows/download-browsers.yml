@@ -173,7 +173,7 @@ jobs:
             
             echo "Downloading browser..."
             if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
-              wget -P ${{ matrix.browser }}/${VERSION} -O "${{ matrix.browser }}_${deb_arch}.deb" "$url"
+              wget -O "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.deb" "$url"
               if [ '${{ matrix.browser }}' == 'chromium' ]; then
                 echo "Download latest libxml2 and chromium-common..."
                 libxml_version=$(curl -sL https://snapshot.debian.org/mr/binary/libxml2-dev  | jq -r '.result[0].binary_version')
@@ -185,14 +185,8 @@ jobs:
                   wget -P ${{ matrix.browser }}/${VERSION} "$i"
                 done
               fi
-
-              echo "DEBUG..."
-              ls -la ${{ matrix.browser }}/${VERSION}
-
               zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" ${{ matrix.browser }}/${VERSION}/*.deb
-
-              
-              rm -f *.deb
+              rm -rf ${{ matrix.browser }}/${VERSION}/*.deb
             else
               wget -P "${{ matrix.browser }}/${VERSION}" "$url"
             fi
