@@ -175,13 +175,26 @@ jobs:
             if [ '${{ matrix.browser }}' != 'chrome-for-testing' ]; then
               wget -O "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.deb" "$url"
               if [ '${{ matrix.browser }}' == 'chromium' ]; then
-                echo "Download latest libxml2 and chromium-common..."
+                echo "Download latest libraries and chromium-common..."
+
+                libflac12t64_version=$(curl -sL https://snapshot.debian.org/mr/binary/libflac12t64  | jq -r '.result[0].binary_version')
+                libflac12t64_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libflac12t64/${libflac12t64_version}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                libflac12t64_url="snapshot.debian.org/archive/debian/${libflac12t64_ts}/pool/main/f/flac/libflac12t64_${libflac12t64_version}_${deb_arch}.deb"
+
+                libopenh264_version=$(curl -sL https://snapshot.debian.org/mr/binary/libopenh264-7  | jq -r '.result[0].binary_version')
+                libopenh264_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libopenh264-7/${libopenh264_version}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                libopenh264_url="snapshot.debian.org/archive/debian/${libopenh264_ts}/pool/main/o/openh264/libopenh264-7_${libopenh264_version}_${deb_arch}.deb"
+
                 libxml_version=$(curl -sL https://snapshot.debian.org/mr/binary/libxml2-dev  | jq -r '.result[0].binary_version')
                 libxml_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libxml2-dev/${libxml_version}/binfiles?fileinfo=1" \
                   | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
                 libxml_url="snapshot.debian.org/archive/debian/${libxml_ts}/pool/main/libx/libxml2/libxml2-16_${libxml_version}_${deb_arch}.deb"
+
                 common_url="snapshot.debian.org/archive/debian/${ts}/pool/main/c/chromium/chromium-common_${VERSION}-1_${deb_arch}.deb"
-                for i in $libxml_url $common_url; do
+
+                for i in $libxml_url $common_url $libflac12t64_url $libopenh264_url; do
                   wget -P ${{ matrix.browser }}/${VERSION} "$i"
                 done
               fi
