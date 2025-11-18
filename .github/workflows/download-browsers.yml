@@ -198,6 +198,23 @@ jobs:
                   wget -P ${{ matrix.browser }}/${VERSION} "$i"
                 done
               fi
+              if [ '${{ matrix.browser }}' == 'firefox' ]; then
+                echo "Download libvpx11 and libnss3..."
+
+                libvpx11_version=$(curl -sL https://snapshot.debian.org/mr/binary/libvpx11  | jq -r '.result[0].binary_version')
+                libvpx11_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libvpx11/${libvpx11_version}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                libvpx11_url="snapshot.debian.org/archive/debian/${libvpx11_ts}/pool/main/libv/libvpx/libvpx11_${libvpx11_version}_${deb_arch}.deb"
+
+                libnss3_version=$(curl -sL https://snapshot.debian.org/mr/binary/libnss3  | jq -r '.result[0].binary_version')
+                libnss3_ts=$(curl -s "https://snapshot.debian.org/mr/binary/libnss3/${libnss3_version}/binfiles?fileinfo=1" \
+                  | jq -r ".fileinfo[ .result[] | select(.architecture==\"${deb_arch}\") | .hash ][0].first_seen")
+                libnss3_url="snapshot.debian.org/archive/debian/${libnss3_ts}/pool/main/n/nss/libnss3_$(echo $libnss3_version | cut -d: -f2)_${deb_arch}.deb"
+
+                for i in $libvpx11_url $libnss3_url; do
+                  wget -P ${{ matrix.browser }}/${VERSION} "$i"
+                done
+              fi
               zip -j "${{ matrix.browser }}/${VERSION}/${{ matrix.browser }}_${deb_arch}.zip" ${{ matrix.browser }}/${VERSION}/*.deb
               rm -rf ${{ matrix.browser }}/${VERSION}/*.deb
             else
